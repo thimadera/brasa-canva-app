@@ -1,84 +1,101 @@
 import { Button, Rows, Text } from "@canva/app-ui-kit";
-import { addElementAtCursor, addElementAtPoint } from "@canva/design";
+import { requestExport } from "@canva/design";
+import type { ExportCompleted } from "@canva/design";
 import { requestOpenExternalUrl } from "@canva/platform";
+import { useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 import * as styles from "styles/components.css";
-import { useFeatureSupport } from "@canva/app-hooks";
 
-export const DOCS_URL = "https://www.canva.dev/docs/apps/";
+const BACKEND_UPLOAD_URL = "https://admin.levebrasa.com/api/canva/export";
 
 export const App = () => {
-  const isSupported = useFeatureSupport();
-  const addElement = [addElementAtPoint, addElementAtCursor].find((fn) =>
-    isSupported(fn),
-  );
-  const onClick = () => {
-    if (!addElement) {
-      return;
-    }
-
-    addElement({
-      type: "text",
-      children: ["Hello world!"],
-    });
-  };
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const openExternalUrl = async (url: string) => {
-    const response = await requestOpenExternalUrl({
-      url,
-    });
-
-    if (response.status === "aborted") {
-      // user decided not to navigate to the link
-    }
+    await requestOpenExternalUrl({ url });
   };
 
   const intl = useIntl();
+
+  const handleExportAndUpload = async () => {
+    setIsLoading(true);
+    setErrorMessage("");
+
+    try {
+      const exportResult = (await requestExport({
+        acceptedFileTypes: ["png"],
+      })) as ExportCompleted;
+
+      if (
+        exportResult.status !== "completed" ||
+        !exportResult.exportBlobs?.length
+      ) {
+        return;
+      }
+
+      const exportedBlob = exportResult.exportBlobs[0];
+
+      const exportedFileUrl = exportedBlob?.url;
+
+      if (exportedFileUrl?.includes(".zip")) {
+        setErrorMessage("Selecione apenas uma página!");
+        return;
+      }
+
+      const title = (exportResult.title || `CanvaDesign-${Date.now()}`).trim();
+
+      const response = await fetch(BACKEND_UPLOAD_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer token",
+        },
+        body: JSON.stringify({
+          title,
+          files: [{ url: exportedFileUrl, mimeType: "image/png" }],
+        }),
+      });
+
+      if (response.ok) {
+        await openExternalUrl(
+          `https://mockup.levebrasa.com/internal/mockup?arte=${encodeURIComponent(title)}`,
+        );
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className={styles.scrollContainer}>
       <Rows spacing="2u">
         <Text>
           <FormattedMessage
-            defaultMessage="
-              To make changes to this app, edit the <code>src/app.tsx</code> file,
-              then close and reopen the app in the editor to preview the changes.
-            "
-            description="Instructions for how to make changes to the app. Do not translate <code>src/app.tsx</code>."
-            values={{
-              code: (chunks) => <code>{chunks}</code>,
-            }}
+            defaultMessage="Clique no botão abaixo para iniciar a exportação do design."
+            description="Instructions for the app usage."
           />
         </Text>
+
         <Button
           variant="primary"
-          onClick={onClick}
-          disabled={!addElement}
-          tooltipLabel={
-            !addElement
-              ? intl.formatMessage({
-                  defaultMessage:
-                    "This feature is not supported in the current page",
-                  description:
-                    "Tooltip label for when a feature is not supported in the current design",
-                })
-              : undefined
-          }
+          onClick={handleExportAndUpload}
           stretch
+          disabled={isLoading}
         >
-          {intl.formatMessage({
-            defaultMessage: "Do something cool",
-            description:
-              "Button text to do something cool. Creates a new text element when pressed.",
-          })}
+          {isLoading
+            ? intl.formatMessage({
+                defaultMessage: "Aguarde...",
+                description: "Loading message on button.",
+              })
+            : intl.formatMessage({
+                defaultMessage: "Exportar Design",
+                description:
+                  "Button text to trigger the export and upload process.",
+              })}
         </Button>
-        <Button variant="secondary" onClick={() => openExternalUrl(DOCS_URL)}>
-          {intl.formatMessage({
-            defaultMessage: "Open Canva Apps SDK docs",
-            description:
-              "Button text to open Canva Apps SDK docs. Opens an external URL when pressed.",
-          })}
-        </Button>
+
+        {errorMessage && <Text tone="critical">{errorMessage}</Text>}
       </Rows>
     </div>
   );
